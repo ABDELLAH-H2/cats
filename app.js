@@ -1,6 +1,9 @@
 const express = require("express");
 const mysql = require("mysql2");
 const path = require("path");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const { authenticateToken, JWT_SECRET } = require("./middleware/auth");
 
 const app = express();
 const post = "5000";
@@ -12,7 +15,7 @@ app.use(express.static(path.join(__dirname, "public")));
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
@@ -32,24 +35,197 @@ const pool = mysql.createPool({
   queueLimit: 0,
 });
 
-//get cats
-app.get("/cats", (req, res) => {
+// ==================== AUTH ROUTES ====================
+
+// Register
+app.post("/auth/register", async (req, res) => {
+  const { username, email, password } = req.body;
+
+  // Validation
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: "Username, email, and password are required" });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  }
+
+  try {
+    // Hash password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    pool.getConnection((err, connection) => {
+      if (err) {
+        console.log(err);
+        return res.status(500).json({ error: "DB connection error" });
+      }
+
+      // Check if user already exists
+      connection.query(
+        "SELECT id FROM users WHERE email = ? OR username = ?",
+        [email, username],
+        (qerr, rows) => {
+          if (qerr) {
+            connection.release();
+            console.log(qerr);
+            return res.status(500).json({ error: "Query error" });
+          }
+
+          if (rows.length > 0) {
+            connection.release();
+            return res.status(409).json({ error: "User with this email or username already exists" });
+          }
+
+          // Insert new user
+          connection.query(
+            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+            [username, email, hashedPassword],
+            (insertErr, result) => {
+              connection.release();
+              if (insertErr) {
+                console.log(insertErr);
+                return res.status(500).json({ error: "Failed to create user" });
+              }
+
+              // Generate token
+              const token = jwt.sign(
+                { id: result.insertId, username, email },
+                JWT_SECRET,
+                { expiresIn: "24h" }
+              );
+
+              res.status(201).json({
+                message: "User registered successfully",
+                token,
+                user: { id: result.insertId, username, email }
+              });
+            }
+          );
+        }
+      );
+    });
+  } catch (error) {
+    console.error("Registration error:", error);
+    res.status(500).json({ error: "Server error during registration" });
+  }
+});
+
+// Login
+app.post("/auth/login", (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required" });
+  }
+
   pool.getConnection((err, connection) => {
     if (err) {
       console.log(err);
       return res.status(500).json({ error: "DB connection error" });
     }
-    connection.query("SELECT * FROM cats", (qerr, rows) => {
-      connection.release();
-      if (qerr) {
-        console.log(qerr);
+
+    connection.query(
+      "SELECT * FROM users WHERE email = ?",
+      [email],
+      async (qerr, rows) => {
+        connection.release();
+
+        if (qerr) {
+          console.log(qerr);
+          return res.status(500).json({ error: "Query error" });
+        }
+
+        if (rows.length === 0) {
+          return res.status(401).json({ error: "Invalid email or password" });
+        }
+
+        const user = rows[0];
+
+        try {
+          const validPassword = await bcrypt.compare(password, user.password);
+          if (!validPassword) {
+            return res.status(401).json({ error: "Invalid email or password" });
+          }
+
+          // Generate token
+          const token = jwt.sign(
+            { id: user.id, username: user.username, email: user.email },
+            JWT_SECRET,
+            { expiresIn: "24h" }
+          );
+
+          res.json({
+            message: "Login successful",
+            token,
+            user: { id: user.id, username: user.username, email: user.email }
+          });
+        } catch (compareError) {
+          console.error("Password comparison error:", compareError);
+          res.status(500).json({ error: "Login error" });
+        }
+      }
+    );
+  });
+});
+
+// Get current user info
+app.get("/auth/me", authenticateToken, (req, res) => {
+  res.json({ user: req.user });
+});
+
+// ==================== CATS ROUTES ====================
+
+// Get cats with pagination
+app.get("/cats", (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+
+  pool.getConnection((err, connection) => {
+    if (err) {
+      console.log(err);
+      return res.status(500).json({ error: "DB connection error" });
+    }
+
+    // First get total count
+    connection.query("SELECT COUNT(*) as total FROM cats", (countErr, countRows) => {
+      if (countErr) {
+        connection.release();
+        console.log(countErr);
         return res.status(500).json({ error: "Query error" });
       }
-      res.json(rows);
+
+      const total = countRows[0].total;
+      const totalPages = Math.ceil(total / limit);
+
+      // Then get paginated data
+      connection.query(
+        "SELECT * FROM cats ORDER BY id DESC LIMIT ? OFFSET ?",
+        [limit, offset],
+        (qerr, rows) => {
+          connection.release();
+          if (qerr) {
+            console.log(qerr);
+            return res.status(500).json({ error: "Query error" });
+          }
+
+          res.json({
+            data: rows,
+            pagination: {
+              page,
+              limit,
+              total,
+              totalPages
+            }
+          });
+        }
+      );
     });
   });
 });
-//get cat by id
+
+// Get cat by id
 app.get("/cats/:id", (req, res) => {
   const { id } = req.params;
 
@@ -72,8 +248,8 @@ app.get("/cats/:id", (req, res) => {
   });
 });
 
-//post cats
-app.post("/cats", (req, res) => {
+// Post cats (protected)
+app.post("/cats", authenticateToken, (req, res) => {
   const { name, pfp } = req.body;
 
   if (!name) {
@@ -102,8 +278,8 @@ app.post("/cats", (req, res) => {
   });
 });
 
-// Delete a record
-app.delete("/cats/:id", (req, res) => {
+// Delete a record (protected)
+app.delete("/cats/:id", authenticateToken, (req, res) => {
   pool.getConnection((err, connection) => {
     if (err) {
       console.error("DB connection error:", err);
@@ -126,8 +302,8 @@ app.delete("/cats/:id", (req, res) => {
   });
 });
 
-// Update a record by ID (Dynamic Update)
-app.put("/cats/:id", (req, res) => {
+// Update a record by ID (protected)
+app.put("/cats/:id", authenticateToken, (req, res) => {
   const catId = req.params.id;
   const updates = req.body;
   if (Object.keys(updates).length === 0) {
