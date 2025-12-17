@@ -1,5 +1,5 @@
 // API Base URL
-const API_URL = "http://localhost:5000";
+const API_URL = "";
 
 // DOM Elements
 const catForm = document.getElementById("cat-form");
