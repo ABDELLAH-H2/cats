@@ -351,3 +351,13 @@ app.put("/cats/:id", authenticateToken, (req, res) => {
 app.listen(post, () => {
   console.log("Server is running on port " + post);
 });
+
+// This tells Cloudflare to send all traffic to your Express app
+export default {
+  async fetch(request, env, ctx) {
+    // We use a library like 'serverless-http' to make Express compatible
+    const serverless = require('serverless-http');
+    const handler = serverless(app);
+    return handler(request, env, ctx);
+  }
+};
