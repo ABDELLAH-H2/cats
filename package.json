@@ -1,21 +1,17 @@
 {
-  "name": "api",
+  "name": "cats-api",
   "version": "1.0.0",
-  "description": "",
-  "main": "app.js",
+  "description": "Cats API for Cloudflare Workers",
+  "type": "module",
   "scripts": {
-    "start": "node app.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^3.0.2",
-    "cors": "^2.8.5",
-    "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "mysql": "^2.18.1",
-    "mysql2": "^3.15.3",
-    "serverless-http": "^4.0.0"
+    "hono": "^4.6.0"
   }
 }
