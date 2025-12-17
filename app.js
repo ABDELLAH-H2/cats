@@ -1,15 +1,10 @@
 const express = require("express");
 const mysql = require("mysql2");
-const path = require("path");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { authenticateToken, JWT_SECRET } = require("./middleware/auth");
 
 const app = express();
-const post = "5000";
-
-// Serve static files from public folder
-app.use(express.static(path.join(__dirname, "public")));
 
 // CORS middleware
 app.use((req, res, next) => {
@@ -348,9 +343,8 @@ app.put("/cats/:id", authenticateToken, (req, res) => {
   });
 });
 
-app.listen(post, () => {
-  console.log("Server is running on port " + post);
-});
+// Note: app.listen() is not used in Cloudflare Workers
+// The worker export below handles incoming requests
 
 // This tells Cloudflare to send all traffic to your Express app
 export default {
