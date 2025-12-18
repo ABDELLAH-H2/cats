@@ -8,6 +8,10 @@ const modalTitle = document.getElementById("modal-title");
 const catIdInput = document.getElementById("cat-id");
 const catNameInput = document.getElementById("cat-name");
 const catPfpInput = document.getElementById("cat-pfp");
+const catTagsInput = document.getElementById("cat-tags");
+const tagSearchInput = document.getElementById("tag-search-input");
+const tagSearchBtn = document.getElementById("tag-search-btn");
+const clearTagBtn = document.getElementById("clear-tag-btn");
 const submitBtn = document.getElementById("submit-btn");
 const cancelBtn = document.getElementById("cancel-btn");
 const addCatBtn = document.getElementById("add-cat-btn");
@@ -28,6 +32,7 @@ let currentPage = 1;
 let totalPages = 1;
 let limit = 10;
 let isSearching = false;
+let currentTagFilter = null;
 
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
@@ -88,6 +93,11 @@ searchInput.addEventListener("input", handleSearch);
 prevBtn.addEventListener("click", () => changePage(-1));
 nextBtn.addEventListener("click", () => changePage(1));
 logoutBtn.addEventListener("click", logout);
+tagSearchBtn.addEventListener("click", handleTagSearch);
+clearTagBtn.addEventListener("click", clearTagSearch);
+tagSearchInput.addEventListener("keypress", (e) => {
+  if (e.key === "Enter") handleTagSearch();
+});
 
 // Open modal for adding
 function openAddModal() {
@@ -115,6 +125,7 @@ function openEditModal(cat) {
   catIdInput.value = cat.id;
   catNameInput.value = cat.name || "";
   catPfpInput.value = cat.pfp || "";
+  catTagsInput.value = cat.tags || "";
   modalOverlay.classList.add("active");
 }
 
@@ -124,7 +135,7 @@ function closeModal() {
   catForm.reset();
 }
 
-// Handle search
+// Handle name search
 function handleSearch() {
   const searchTerm = searchInput.value.toLowerCase().trim();
   if (!searchTerm) {
@@ -137,8 +148,32 @@ function handleSearch() {
     cat.name.toLowerCase().includes(searchTerm)
   );
   renderCats(filteredCats);
-  // Hide pagination during search
+  // Hide pagination during name search
   document.getElementById("pagination").style.display = "none";
+}
+
+// Handle tag search
+function handleTagSearch() {
+  const tag = tagSearchInput.value.trim();
+  if (!tag) {
+    showToast("Please enter a tag to search", "error");
+    return;
+  }
+  currentTagFilter = tag;
+  currentPage = 1;
+  searchInput.value = ""; // Clear name search
+  isSearching = false;
+  clearTagBtn.style.display = "inline-block";
+  loadCats();
+}
+
+// Clear tag search
+function clearTagSearch() {
+  currentTagFilter = null;
+  tagSearchInput.value = "";
+  clearTagBtn.style.display = "none";
+  currentPage = 1;
+  loadCats();
 }
 
 // Change page
@@ -165,14 +200,17 @@ function updatePagination(pagination) {
     : "flex";
 }
 
-// Load all cats with pagination
+// Load all cats with pagination and optional tag filter
 async function loadCats() {
   catsContainer.innerHTML = '<div class="loading">Loading cats...</div>';
 
   try {
-    const response = await fetch(
-      `${API_URL}/cats?page=${currentPage}&limit=${limit}`
-    );
+    let url = `${API_URL}/cats?page=${currentPage}&limit=${limit}`;
+    if (currentTagFilter) {
+      url += `&tag=${encodeURIComponent(currentTagFilter)}`;
+    }
+
+    const response = await fetch(url);
     if (!response.ok) throw new Error("Failed to fetch cats");
 
     const result = await response.json();
@@ -203,6 +241,14 @@ function renderCats(cats) {
         ? cat.pfp.substring(0, 40) + (cat.pfp.length > 40 ? "..." : "")
         : "";
 
+      // Parse and display tags
+      const tagsHtml = cat.tags
+        ? cat.tags.split(',').map(tag =>
+          `<span class="cat-tag" onclick="searchByTag('${escapeHtml(tag.trim())}')">` +
+          `${escapeHtml(tag.trim())}</span>`
+        ).join('')
+        : '';
+
       return `
         <div class="cat-card" data-id="${cat.id}">
             ${cat.pfp
@@ -213,6 +259,7 @@ function renderCats(cats) {
         }
             <div class="cat-info">
                 <h3 class="cat-name">${escapeHtml(cat.name)}</h3>
+                ${tagsHtml ? `<div class="cat-tags">${tagsHtml}</div>` : ''}
                 ${cat.pfp
           ? `<a href="${cat.pfp}" target="_blank" class="cat-link">${escapeHtml(
             cat.name
@@ -246,6 +293,7 @@ async function handleFormSubmit(e) {
 
   const name = catNameInput.value.trim();
   let pfp = catPfpInput.value.trim();
+  const tags = catTagsInput.value.trim();
 
   if (!name) {
     showToast("Please enter a cat name", "error");
@@ -282,6 +330,7 @@ async function handleFormSubmit(e) {
       const catId = catIdInput.value;
       const updateData = { name };
       if (pfp) updateData.pfp = pfp;
+      updateData.tags = tags;
 
       const response = await fetch(`${API_URL}/cats/${catId}`, {
         method: "PUT",
@@ -298,7 +347,7 @@ async function handleFormSubmit(e) {
       if (!response.ok) throw new Error("Failed to update cat");
       showToast("Cat updated successfully!", "success");
     } else {
-      const postData = { name };
+      const postData = { name, tags };
       if (pfp) postData.pfp = pfp;
 
       const response = await fetch(`${API_URL}/cats`, {
@@ -405,4 +454,10 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Search by clicking a tag
+function searchByTag(tag) {
+  tagSearchInput.value = tag;
+  handleTagSearch();
 }

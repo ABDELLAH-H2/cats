@@ -136,23 +136,40 @@ app.get('/auth/me', authenticateToken, async (c) => {
 
 // ==================== CATS ROUTES ====================
 
-// Get cats with pagination
+// Get cats with pagination and optional tag search
 app.get('/cats', async (c) => {
   const db = getDB(c);
   const page = parseInt(c.req.query('page') || '1');
   const limit = parseInt(c.req.query('limit') || '10');
   const offset = (page - 1) * limit;
+  const tagSearch = c.req.query('tag')?.toLowerCase().trim();
 
   try {
+    let countQuery = 'SELECT COUNT(*) as total FROM cats';
+    let dataQuery = 'SELECT * FROM cats';
+    let queryParams = [];
+
+    // Add tag filter if provided
+    if (tagSearch) {
+      const tagPattern = `%${tagSearch}%`;
+      countQuery += ' WHERE LOWER(tags) LIKE ?';
+      dataQuery += ' WHERE LOWER(tags) LIKE ?';
+      queryParams.push(tagPattern);
+    }
+
+    dataQuery += ' ORDER BY id DESC LIMIT ? OFFSET ?';
+
     // Get total count
-    const countResult = await db.prepare('SELECT COUNT(*) as total FROM cats').first();
+    const countResult = tagSearch
+      ? await db.prepare(countQuery).bind(queryParams[0]).first()
+      : await db.prepare(countQuery).first();
     const total = countResult.total;
     const totalPages = Math.ceil(total / limit);
 
     // Get paginated data
-    const rows = await db.prepare(
-      'SELECT * FROM cats ORDER BY id DESC LIMIT ? OFFSET ?'
-    ).bind(limit, offset).all();
+    const rows = tagSearch
+      ? await db.prepare(dataQuery).bind(queryParams[0], limit, offset).all()
+      : await db.prepare(dataQuery).bind(limit, offset).all();
 
     return c.json({
       data: rows.results,
@@ -160,7 +177,8 @@ app.get('/cats', async (c) => {
         page,
         limit,
         total,
-        totalPages
+        totalPages,
+        tagFilter: tagSearch || null
       }
     });
   } catch (error) {
@@ -189,23 +207,19 @@ app.get('/cats/:id', async (c) => {
 // Post cats (protected)
 app.post('/cats', authenticateToken, async (c) => {
   const db = getDB(c);
-  const { name, pfp } = await c.req.json();
+  const { name, pfp, tags } = await c.req.json();
 
   if (!name) {
     return c.json({ error: 'Name is required' }, 400);
   }
 
+  // Normalize tags: trim whitespace and convert to lowercase
+  const normalizedTags = tags ? tags.split(',').map(t => t.trim().toLowerCase()).filter(t => t).join(',') : null;
+
   try {
-    let result;
-    if (pfp) {
-      result = await db.prepare(
-        'INSERT INTO cats (name, pfp) VALUES (?, ?)'
-      ).bind(name, pfp).run();
-    } else {
-      result = await db.prepare(
-        'INSERT INTO cats (name) VALUES (?)'
-      ).bind(name).run();
-    }
+    const result = await db.prepare(
+      'INSERT INTO cats (name, pfp, tags) VALUES (?, ?, ?)'
+    ).bind(name, pfp || null, normalizedTags).run();
 
     return c.json({
       message: 'Cat added successfully',
@@ -241,7 +255,7 @@ app.put('/cats/:id', authenticateToken, async (c) => {
     return c.json({ error: 'No fields provided for update.' }, 400);
   }
 
-  const allowedFields = ['name', 'pfp'];
+  const allowedFields = ['name', 'pfp', 'tags'];
   const fields = [];
   const values = [];
 
@@ -283,9 +297,9 @@ app.get('/api', (c) => {
     message: 'Cats API',
     version: '1.0.0',
     endpoints: [
-      'GET /cats - List all cats (paginated)',
+      'GET /cats - List all cats (paginated, optional ?tag=tagname for tag search)',
       'GET /cats/:id - Get a cat by ID',
-      'POST /cats - Create a cat (auth required)',
+      'POST /cats - Create a cat with optional tags (auth required)',
       'PUT /cats/:id - Update a cat (auth required)',
       'DELETE /cats/:id - Delete a cat (auth required)',
       'POST /auth/register - Register a new user',

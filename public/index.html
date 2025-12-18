@@ -31,6 +31,11 @@
     <!-- Search Bar -->
     <div class="search-container">
       <input type="text" id="search-input" placeholder="Search cats by name..." class="search-input" />
+      <div class="tag-search-container">
+        <input type="text" id="tag-search-input" placeholder="Search by tag..." class="search-input tag-search-input" />
+        <button class="btn btn-search" id="tag-search-btn">Search Tag</button>
+        <button class="btn btn-clear" id="clear-tag-btn" style="display: none;">Clear</button>
+      </div>
     </div>
 
     <!-- Cats Grid -->
@@ -63,6 +68,10 @@
         <div class="form-group">
           <label for="cat-pfp">Profile Picture URL</label>
           <input type="url" id="cat-pfp" placeholder="https://cataas.com/cat" />
+        </div>
+        <div class="form-group">
+          <label for="cat-tags">Tags (comma-separated)</label>
+          <input type="text" id="cat-tags" placeholder="fluffy, orange, playful" />
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-cancel" id="cancel-btn">

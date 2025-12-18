@@ -78,6 +78,19 @@ body {
 /* Search Bar */
 .search-container {
   margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tag-search-container {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.tag-search-input {
+  flex: 1;
 }
 
 .search-input {
@@ -99,6 +112,28 @@ body {
 
 .search-input::placeholder {
   color: #999;
+}
+
+.btn-search {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  white-space: nowrap;
+}
+
+.btn-search:hover {
+  background: linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%);
+}
+
+.btn-clear {
+  background: #f44336;
+  color: white;
+  border: none;
+  white-space: nowrap;
+}
+
+.btn-clear:hover {
+  background: #d32f2f;
 }
 
 /* Cats Grid */
@@ -135,6 +170,30 @@ body {
 
 .cat-info {
   padding: 12px;
+}
+
+/* Cat Tags */
+.cat-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.cat-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-size: 11px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.cat-tag:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
 }
 
 .cat-name {
