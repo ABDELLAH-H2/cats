@@ -64,12 +64,43 @@ function checkAuthState() {
     userInfo.style.display = "inline-block";
     usernameDisplay.textContent = user.username;
     loginLink.style.display = "none";
+    // Load cart from server for logged-in user
+    loadCartFromServer();
   } else {
     // Show logged-out state
     addCatBtn.style.display = "none";
     logoutBtn.style.display = "none";
     userInfo.style.display = "none";
     loginLink.style.display = "inline-block";
+    // Use localStorage cart for guests
+    cart = JSON.parse(localStorage.getItem("catCart")) || [];
+    updateCartUI();
+  }
+}
+
+// Load cart from server
+async function loadCartFromServer() {
+  if (!isLoggedIn()) return;
+
+  const token = getAuthToken();
+  try {
+    const response = await fetch(`${API_URL}/cart`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      cart = data.cart || [];
+      updateCartUI();
+      // Re-render cats to update button states
+      if (allCats.length > 0) {
+        renderCats(allCats);
+      }
+    }
+  } catch (error) {
+    console.error("Error loading cart from server:", error);
   }
 }
 
@@ -89,6 +120,10 @@ function isLoggedIn() {
 function logout() {
   localStorage.removeItem("authToken");
   localStorage.removeItem("user");
+  // Clear cart for new user session
+  cart = [];
+  updateCartUI();
+  renderCart();
   checkAuthState();
   loadCats();
   showToast("Logged out successfully", "success");
@@ -499,7 +534,7 @@ function closeCart() {
 }
 
 // Add cat to cart
-function addToCart(catId) {
+async function addToCart(catId) {
   // Find the cat from allCats
   const cat = allCats.find(c => c.id === catId);
   if (!cat) {
@@ -509,57 +544,163 @@ function addToCart(catId) {
 
   // Check if already in cart
   const existingIndex = cart.findIndex(item => item.id === catId);
-  if (existingIndex > -1) {
-    // Remove from cart if already exists (toggle behavior)
-    cart.splice(existingIndex, 1);
-    showToast(`${cat.name} removed from cart`, "success");
-  } else {
-    // Add to cart
-    cart.push({
-      id: cat.id,
-      name: cat.name,
-      pfp: cat.pfp,
-      tags: cat.tags
-    });
-    showToast(`${cat.name} added to cart!`, "success");
-    openCart(); // Open sidebar when adding
-  }
 
-  saveCart();
-  updateCartUI();
-  renderCats(allCats); // Re-render to update button states
+  if (isLoggedIn()) {
+    // Use API for logged-in users
+    const token = getAuthToken();
+
+    if (existingIndex > -1) {
+      // Remove from cart
+      try {
+        const response = await fetch(`${API_URL}/cart/${catId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (response.ok) {
+          cart.splice(existingIndex, 1);
+          showToast(`${cat.name} removed from cart`, "success");
+          updateCartUI();
+          renderCats(allCats);
+          renderCart();
+        } else {
+          showToast("Failed to remove from cart", "error");
+        }
+      } catch (error) {
+        console.error("Cart remove error:", error);
+        showToast("Failed to remove from cart", "error");
+      }
+    } else {
+      // Add to cart
+      try {
+        const response = await fetch(`${API_URL}/cart`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ catId })
+        });
+
+        if (response.ok) {
+          cart.push({
+            id: cat.id,
+            name: cat.name,
+            pfp: cat.pfp,
+            tags: cat.tags
+          });
+          showToast(`${cat.name} added to cart!`, "success");
+          openCart();
+          updateCartUI();
+          renderCats(allCats);
+        } else if (response.status === 409) {
+          showToast("Cat already in cart", "error");
+        } else {
+          showToast("Failed to add to cart", "error");
+        }
+      } catch (error) {
+        console.error("Cart add error:", error);
+        showToast("Failed to add to cart", "error");
+      }
+    }
+  } else {
+    // Use localStorage for guests
+    if (existingIndex > -1) {
+      cart.splice(existingIndex, 1);
+      showToast(`${cat.name} removed from cart`, "success");
+    } else {
+      cart.push({
+        id: cat.id,
+        name: cat.name,
+        pfp: cat.pfp,
+        tags: cat.tags
+      });
+      showToast(`${cat.name} added to cart!`, "success");
+      openCart();
+    }
+    saveCartToLocal();
+    updateCartUI();
+    renderCats(allCats);
+  }
 }
 
 // Remove item from cart
-function removeFromCart(catId) {
+async function removeFromCart(catId) {
   const itemIndex = cart.findIndex(item => item.id === catId);
-  if (itemIndex > -1) {
-    const itemName = cart[itemIndex].name;
+  if (itemIndex === -1) return;
+
+  const itemName = cart[itemIndex].name;
+
+  if (isLoggedIn()) {
+    const token = getAuthToken();
+    try {
+      const response = await fetch(`${API_URL}/cart/${catId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        cart.splice(itemIndex, 1);
+        updateCartUI();
+        renderCart();
+        renderCats(allCats);
+        showToast(`${itemName} removed from cart`, "success");
+      } else {
+        showToast("Failed to remove from cart", "error");
+      }
+    } catch (error) {
+      console.error("Cart remove error:", error);
+      showToast("Failed to remove from cart", "error");
+    }
+  } else {
     cart.splice(itemIndex, 1);
-    saveCart();
+    saveCartToLocal();
     updateCartUI();
     renderCart();
-    renderCats(allCats); // Re-render to update button states
+    renderCats(allCats);
     showToast(`${itemName} removed from cart`, "success");
   }
 }
 
 // Clear entire cart
-function clearCart() {
+async function clearCart() {
   if (cart.length === 0) return;
 
-  if (confirm("Are you sure you want to clear your cart?")) {
+  if (!confirm("Are you sure you want to clear your cart?")) return;
+
+  if (isLoggedIn()) {
+    const token = getAuthToken();
+    try {
+      const response = await fetch(`${API_URL}/cart`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        cart = [];
+        updateCartUI();
+        renderCart();
+        renderCats(allCats);
+        showToast("Cart cleared", "success");
+      } else {
+        showToast("Failed to clear cart", "error");
+      }
+    } catch (error) {
+      console.error("Cart clear error:", error);
+      showToast("Failed to clear cart", "error");
+    }
+  } else {
     cart = [];
-    saveCart();
+    saveCartToLocal();
     updateCartUI();
     renderCart();
-    renderCats(allCats); // Re-render to update button states
+    renderCats(allCats);
     showToast("Cart cleared", "success");
   }
 }
 
-// Save cart to localStorage
-function saveCart() {
+// Save cart to localStorage (for guests only)
+function saveCartToLocal() {
   localStorage.setItem("catCart", JSON.stringify(cart));
 }
 

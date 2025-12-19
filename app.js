@@ -291,6 +291,103 @@ app.put('/cats/:id', authenticateToken, async (c) => {
   }
 });
 
+// ==================== CART ROUTES ====================
+
+// Get user's cart
+app.get('/cart', authenticateToken, async (c) => {
+  const db = getDB(c);
+  const user = c.get('user');
+
+  try {
+    const result = await db.prepare(`
+      SELECT c.id, c.name, c.pfp, c.tags, cart.added_at 
+      FROM cart 
+      JOIN cats c ON cart.cat_id = c.id 
+      WHERE cart.user_id = ?
+      ORDER BY cart.added_at DESC
+    `).bind(user.id).all();
+
+    return c.json({ cart: result.results });
+  } catch (error) {
+    console.error('Cart fetch error:', error);
+    return c.json({ error: 'Failed to fetch cart' }, 500);
+  }
+});
+
+// Add cat to cart
+app.post('/cart', authenticateToken, async (c) => {
+  const db = getDB(c);
+  const user = c.get('user');
+  const { catId } = await c.req.json();
+
+  if (!catId) {
+    return c.json({ error: 'Cat ID is required' }, 400);
+  }
+
+  try {
+    // Check if cat exists
+    const cat = await db.prepare('SELECT id FROM cats WHERE id = ?').bind(catId).first();
+    if (!cat) {
+      return c.json({ error: 'Cat not found' }, 404);
+    }
+
+    // Check if already in cart
+    const existing = await db.prepare(
+      'SELECT id FROM cart WHERE user_id = ? AND cat_id = ?'
+    ).bind(user.id, catId).first();
+
+    if (existing) {
+      return c.json({ error: 'Cat already in cart' }, 409);
+    }
+
+    // Add to cart
+    await db.prepare(
+      'INSERT INTO cart (user_id, cat_id) VALUES (?, ?)'
+    ).bind(user.id, catId).run();
+
+    return c.json({ message: 'Cat added to cart' }, 201);
+  } catch (error) {
+    console.error('Cart add error:', error);
+    return c.json({ error: 'Failed to add to cart' }, 500);
+  }
+});
+
+// Remove cat from cart
+app.delete('/cart/:catId', authenticateToken, async (c) => {
+  const db = getDB(c);
+  const user = c.get('user');
+  const catId = c.req.param('catId');
+
+  try {
+    const result = await db.prepare(
+      'DELETE FROM cart WHERE user_id = ? AND cat_id = ?'
+    ).bind(user.id, catId).run();
+
+    if (result.meta.changes === 0) {
+      return c.json({ error: 'Item not found in cart' }, 404);
+    }
+
+    return c.json({ message: 'Cat removed from cart' });
+  } catch (error) {
+    console.error('Cart remove error:', error);
+    return c.json({ error: 'Failed to remove from cart' }, 500);
+  }
+});
+
+// Clear entire cart
+app.delete('/cart', authenticateToken, async (c) => {
+  const db = getDB(c);
+  const user = c.get('user');
+
+  try {
+    await db.prepare('DELETE FROM cart WHERE user_id = ?').bind(user.id).run();
+    return c.json({ message: 'Cart cleared' });
+  } catch (error) {
+    console.error('Cart clear error:', error);
+    return c.json({ error: 'Failed to clear cart' }, 500);
+  }
+});
+
 // API info route
 app.get('/api', (c) => {
   return c.json({
@@ -304,9 +401,14 @@ app.get('/api', (c) => {
       'DELETE /cats/:id - Delete a cat (auth required)',
       'POST /auth/register - Register a new user',
       'POST /auth/login - Login',
-      'GET /auth/me - Get current user (auth required)'
+      'GET /auth/me - Get current user (auth required)',
+      'GET /cart - Get user cart (auth required)',
+      'POST /cart - Add cat to cart (auth required)',
+      'DELETE /cart/:catId - Remove cat from cart (auth required)',
+      'DELETE /cart - Clear cart (auth required)'
     ]
   });
 });
 
 export default app;
+
