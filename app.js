@@ -1,38 +1,104 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { sign, verify } from 'hono/jwt';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import bcrypt from 'bcryptjs';
 
 const app = new Hono();
 
-// JWT Secret - in production, use environment variables
-const JWT_SECRET = 'abdellahtest';
+// Session settings
+const SESSION_DURATION_DAYS = 7;
 
-// CORS middleware
+// Cookie options
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'None',
+  path: '/',
+  maxAge: 60 * 60 * 24 * SESSION_DURATION_DAYS
+};
+
+// CORS middleware - Allow credentials for cookies
 app.use('*', cors({
-  origin: '*',
+  origin: (origin) => origin || '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type'],
+  credentials: true,
 }));
 
 // Helper function to get D1 database from context
 const getDB = (c) => c.env.DB;
 
-// Auth middleware
-const authenticateToken = async (c, next) => {
-  const authHeader = c.req.header('Authorization');
-  const token = authHeader && authHeader.split(' ')[1];
+// Generate random session ID
+function generateSessionId() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let sessionId = '';
+  for (let i = 0; i < 64; i++) {
+    sessionId += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return sessionId;
+}
 
-  if (!token) {
-    return c.json({ error: 'Access denied. No token provided.' }, 401);
+// Create session in database
+async function createSession(db, userId) {
+  const sessionId = generateSessionId();
+  const expiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  await db.prepare(
+    'INSERT INTO sessions (session_id, user_id, expires_at) VALUES (?, ?, ?)'
+  ).bind(sessionId, userId, expiresAt).run();
+
+  return sessionId;
+}
+
+// Get session from database
+async function getSession(db, sessionId) {
+  const session = await db.prepare(
+    'SELECT s.*, u.id as user_id, u.username, u.email FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.session_id = ? AND s.expires_at > datetime("now")'
+  ).bind(sessionId).first();
+
+  return session;
+}
+
+// Delete session from database
+async function deleteSession(db, sessionId) {
+  await db.prepare('DELETE FROM sessions WHERE session_id = ?').bind(sessionId).run();
+}
+
+// Delete all sessions for user (logout everywhere)
+async function deleteUserSessions(db, userId) {
+  await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
+}
+
+// Auth middleware - Validate session from cookie
+const authenticateSession = async (c, next) => {
+  const sessionId = getCookie(c, 'sessionId');
+  const db = getDB(c);
+
+  if (!sessionId) {
+    return c.json({ error: 'Access denied. Not authenticated.' }, 401);
   }
 
   try {
-    const decoded = await verify(token, JWT_SECRET);
-    c.set('user', decoded);
+    const session = await getSession(db, sessionId);
+
+    if (!session) {
+      deleteCookie(c, 'sessionId', { path: '/' });
+      return c.json({ error: 'Session expired. Please sign in again.' }, 401);
+    }
+
+    // Set user info on context
+    c.set('user', {
+      id: session.user_id,
+      username: session.username,
+      email: session.email
+    });
+    c.set('sessionId', sessionId);
+
     await next();
   } catch (err) {
-    return c.json({ error: 'Invalid or expired token.' }, 403);
+    console.error('Session validation error:', err);
+    deleteCookie(c, 'sessionId', { path: '/' });
+    return c.json({ error: 'Session error.' }, 500);
   }
 };
 
@@ -71,16 +137,17 @@ app.post('/auth/register', async (c) => {
       'INSERT INTO users (username, email, password) VALUES (?, ?, ?)'
     ).bind(username, email, hashedPassword).run();
 
-    // Generate token
-    const token = await sign(
-      { id: result.meta.last_row_id, username, email },
-      JWT_SECRET
-    );
+    const userId = result.meta.last_row_id;
+
+    // Create session
+    const sessionId = await createSession(db, userId);
+
+    // Set session cookie
+    setCookie(c, 'sessionId', sessionId, COOKIE_OPTIONS);
 
     return c.json({
       message: 'User registered successfully',
-      token,
-      user: { id: result.meta.last_row_id, username, email }
+      user: { id: userId, username, email }
     }, 201);
   } catch (error) {
     console.error('Registration error:', error);
@@ -111,15 +178,14 @@ app.post('/auth/login', async (c) => {
       return c.json({ error: 'Invalid email or password' }, 401);
     }
 
-    // Generate token
-    const token = await sign(
-      { id: user.id, username: user.username, email: user.email },
-      JWT_SECRET
-    );
+    // Create session
+    const sessionId = await createSession(db, user.id);
+
+    // Set session cookie
+    setCookie(c, 'sessionId', sessionId, COOKIE_OPTIONS);
 
     return c.json({
       message: 'Login successful',
-      token,
       user: { id: user.id, username: user.username, email: user.email }
     });
   } catch (error) {
@@ -128,8 +194,21 @@ app.post('/auth/login', async (c) => {
   }
 });
 
+// Logout - Delete session from database and clear cookie
+app.post('/auth/logout', async (c) => {
+  const sessionId = getCookie(c, 'sessionId');
+  const db = getDB(c);
+
+  if (sessionId) {
+    await deleteSession(db, sessionId);
+  }
+
+  deleteCookie(c, 'sessionId', { path: '/' });
+  return c.json({ message: 'Logged out successfully' });
+});
+
 // Get current user info
-app.get('/auth/me', authenticateToken, async (c) => {
+app.get('/auth/me', authenticateSession, async (c) => {
   const user = c.get('user');
   return c.json({ user });
 });
@@ -205,7 +284,7 @@ app.get('/cats/:id', async (c) => {
 });
 
 // Post cats (protected)
-app.post('/cats', authenticateToken, async (c) => {
+app.post('/cats', authenticateSession, async (c) => {
   const db = getDB(c);
   const { name, pfp, tags } = await c.req.json();
 
@@ -232,7 +311,7 @@ app.post('/cats', authenticateToken, async (c) => {
 });
 
 // Delete a record (protected)
-app.delete('/cats/:id', authenticateToken, async (c) => {
+app.delete('/cats/:id', authenticateSession, async (c) => {
   const db = getDB(c);
   const id = c.req.param('id');
 
@@ -246,7 +325,7 @@ app.delete('/cats/:id', authenticateToken, async (c) => {
 });
 
 // Update a record by ID (protected)
-app.put('/cats/:id', authenticateToken, async (c) => {
+app.put('/cats/:id', authenticateSession, async (c) => {
   const db = getDB(c);
   const catId = c.req.param('id');
   const updates = await c.req.json();
@@ -294,7 +373,7 @@ app.put('/cats/:id', authenticateToken, async (c) => {
 // ==================== CART ROUTES ====================
 
 // Get user's cart
-app.get('/cart', authenticateToken, async (c) => {
+app.get('/cart', authenticateSession, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
 
@@ -315,7 +394,7 @@ app.get('/cart', authenticateToken, async (c) => {
 });
 
 // Add cat to cart
-app.post('/cart', authenticateToken, async (c) => {
+app.post('/cart', authenticateSession, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
   const { catId } = await c.req.json();
