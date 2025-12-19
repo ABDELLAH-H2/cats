@@ -25,6 +25,16 @@ const logoutBtn = document.getElementById("logout-btn");
 const userInfo = document.getElementById("user-info");
 const usernameDisplay = document.getElementById("username-display");
 
+// Cart DOM Elements
+const cartBtn = document.getElementById("cart-btn");
+const cartSidebar = document.getElementById("cart-sidebar");
+const cartOverlay = document.getElementById("cart-overlay");
+const cartCloseBtn = document.getElementById("cart-close-btn");
+const cartContent = document.getElementById("cart-content");
+const cartCount = document.getElementById("cart-count");
+const cartFooter = document.getElementById("cart-footer");
+const clearCartBtn = document.getElementById("clear-cart-btn");
+
 // State
 let isEditing = false;
 let allCats = []; // Store all cats for filtering
@@ -33,11 +43,13 @@ let totalPages = 1;
 let limit = 10;
 let isSearching = false;
 let currentTagFilter = null;
+let cart = JSON.parse(localStorage.getItem("catCart")) || [];
 
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
   checkAuthState();
   loadCats();
+  updateCartUI();
 });
 
 // Auth state management
@@ -98,6 +110,12 @@ clearTagBtn.addEventListener("click", clearTagSearch);
 tagSearchInput.addEventListener("keypress", (e) => {
   if (e.key === "Enter") handleTagSearch();
 });
+
+// Cart Event Listeners
+cartBtn.addEventListener("click", openCart);
+cartCloseBtn.addEventListener("click", closeCart);
+cartOverlay.addEventListener("click", closeCart);
+clearCartBtn.addEventListener("click", clearCart);
 
 // Open modal for adding
 function openAddModal() {
@@ -266,6 +284,7 @@ function renderCats(cats) {
           )}</a>`
           : ""
         }
+                <button class="${cart.some(item => item.id === cat.id) ? 'btn btn-add-cart added' : 'btn btn-add-cart'}" onclick="addToCart(${cat.id})">${cart.some(item => item.id === cat.id) ? '✓ In Cart' : 'Add to Cart'}</button>
                 ${loggedIn
           ? `
                 <div class="cat-actions">
@@ -460,4 +479,122 @@ function escapeHtml(text) {
 function searchByTag(tag) {
   tagSearchInput.value = tag;
   handleTagSearch();
+}
+
+// ==================== CART FUNCTIONS ====================
+
+// Open cart sidebar
+function openCart() {
+  cartSidebar.classList.add("active");
+  cartOverlay.classList.add("active");
+  document.body.style.overflow = "hidden";
+  renderCart();
+}
+
+// Close cart sidebar
+function closeCart() {
+  cartSidebar.classList.remove("active");
+  cartOverlay.classList.remove("active");
+  document.body.style.overflow = "";
+}
+
+// Add cat to cart
+function addToCart(catId) {
+  // Find the cat from allCats
+  const cat = allCats.find(c => c.id === catId);
+  if (!cat) {
+    showToast("Cat not found", "error");
+    return;
+  }
+
+  // Check if already in cart
+  const existingIndex = cart.findIndex(item => item.id === catId);
+  if (existingIndex > -1) {
+    // Remove from cart if already exists (toggle behavior)
+    cart.splice(existingIndex, 1);
+    showToast(`${cat.name} removed from cart`, "success");
+  } else {
+    // Add to cart
+    cart.push({
+      id: cat.id,
+      name: cat.name,
+      pfp: cat.pfp,
+      tags: cat.tags
+    });
+    showToast(`${cat.name} added to cart!`, "success");
+    openCart(); // Open sidebar when adding
+  }
+
+  saveCart();
+  updateCartUI();
+  renderCats(allCats); // Re-render to update button states
+}
+
+// Remove item from cart
+function removeFromCart(catId) {
+  const itemIndex = cart.findIndex(item => item.id === catId);
+  if (itemIndex > -1) {
+    const itemName = cart[itemIndex].name;
+    cart.splice(itemIndex, 1);
+    saveCart();
+    updateCartUI();
+    renderCart();
+    renderCats(allCats); // Re-render to update button states
+    showToast(`${itemName} removed from cart`, "success");
+  }
+}
+
+// Clear entire cart
+function clearCart() {
+  if (cart.length === 0) return;
+
+  if (confirm("Are you sure you want to clear your cart?")) {
+    cart = [];
+    saveCart();
+    updateCartUI();
+    renderCart();
+    renderCats(allCats); // Re-render to update button states
+    showToast("Cart cleared", "success");
+  }
+}
+
+// Save cart to localStorage
+function saveCart() {
+  localStorage.setItem("catCart", JSON.stringify(cart));
+}
+
+// Update cart count and footer visibility
+function updateCartUI() {
+  cartCount.textContent = cart.length;
+  cartFooter.style.display = cart.length > 0 ? "block" : "none";
+}
+
+// Render cart items in sidebar
+function renderCart() {
+  if (cart.length === 0) {
+    cartContent.innerHTML = '<div class="cart-empty">Your cart is empty</div>';
+    return;
+  }
+
+  cartContent.innerHTML = cart.map(item => {
+    const tagsHtml = item.tags
+      ? item.tags.split(',').map(tag =>
+        `<span class="cart-item-tag">${escapeHtml(tag.trim())}</span>`
+      ).join('')
+      : '';
+
+    return `
+      <div class="cart-item" data-id="${item.id}">
+        ${item.pfp
+        ? `<img src="${item.pfp}" alt="${escapeHtml(item.name)}" class="cart-item-image" onerror="this.outerHTML='<div class=\\'cart-item-image placeholder\\'>🐱</div>'">`
+        : '<div class="cart-item-image placeholder">🐱</div>'
+      }
+        <div class="cart-item-info">
+          <div class="cart-item-name">${escapeHtml(item.name)}</div>
+          ${tagsHtml ? `<div class="cart-item-tags">${tagsHtml}</div>` : ''}
+        </div>
+        <button class="cart-item-remove" onclick="removeFromCart(${item.id})" title="Remove">&times;</button>
+      </div>
+    `;
+  }).join('');
 }

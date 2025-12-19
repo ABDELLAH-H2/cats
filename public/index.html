@@ -9,10 +9,28 @@
 </head>
 
 <body>
+  <!-- Cart Sidebar -->
+  <div class="cart-overlay" id="cart-overlay"></div>
+  <div class="cart-sidebar" id="cart-sidebar">
+    <div class="cart-header">
+      <h2>🛒 Your Cart</h2>
+      <button class="cart-close-btn" id="cart-close-btn">&times;</button>
+    </div>
+    <div class="cart-content" id="cart-content">
+      <div class="cart-empty">Your cart is empty</div>
+    </div>
+    <div class="cart-footer" id="cart-footer" style="display: none;">
+      <button class="btn btn-clear-cart" id="clear-cart-btn">Clear Cart</button>
+    </div>
+  </div>
+
   <div class="container">
     <header class="header">
       <h1>🐱 Cats Gallery</h1>
       <div class="header-actions">
+        <button class="btn btn-cart" id="cart-btn">
+          🛒 Cart (<span id="cart-count">0</span>)
+        </button>
         <button class="btn btn-add" id="add-cat-btn" style="display: none">
           Add Cat
         </button>
