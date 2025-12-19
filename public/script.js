@@ -64,6 +64,7 @@ function checkAuthState() {
     userInfo.style.display = "inline-block";
     usernameDisplay.textContent = user.username;
     loginLink.style.display = "none";
+    cartBtn.style.display = "inline-block"; // Show cart button
     // Load cart from server for logged-in user
     loadCartFromServer();
   } else {
@@ -72,8 +73,9 @@ function checkAuthState() {
     logoutBtn.style.display = "none";
     userInfo.style.display = "none";
     loginLink.style.display = "inline-block";
-    // Use localStorage cart for guests
-    cart = JSON.parse(localStorage.getItem("catCart")) || [];
+    cartBtn.style.display = "none"; // Hide cart button
+    // Clear cart for logged out users
+    cart = [];
     updateCartUI();
   }
 }
@@ -319,7 +321,7 @@ function renderCats(cats) {
           )}</a>`
           : ""
         }
-                <button class="${cart.some(item => item.id === cat.id) ? 'btn btn-add-cart added' : 'btn btn-add-cart'}" onclick="addToCart(${cat.id})">${cart.some(item => item.id === cat.id) ? '✓ In Cart' : 'Add to Cart'}</button>
+                ${loggedIn ? `<button class="${cart.some(item => item.id === cat.id) ? 'btn btn-add-cart added' : 'btn btn-add-cart'}" onclick="addToCart(${cat.id})">${cart.some(item => item.id === cat.id) ? '✓ In Cart' : 'Add to Cart'}</button>` : ''}
                 ${loggedIn
           ? `
                 <div class="cat-actions">
