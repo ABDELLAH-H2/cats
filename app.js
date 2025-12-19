@@ -432,7 +432,7 @@ app.post('/cart', authenticateSession, async (c) => {
 });
 
 // Remove cat from cart
-app.delete('/cart/:catId', authenticateToken, async (c) => {
+app.delete('/cart/:catId', authenticateSession, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
   const catId = c.req.param('catId');
@@ -454,7 +454,7 @@ app.delete('/cart/:catId', authenticateToken, async (c) => {
 });
 
 // Clear entire cart
-app.delete('/cart', authenticateToken, async (c) => {
+app.delete('/cart', authenticateSession, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
 
