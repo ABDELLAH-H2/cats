@@ -1,6 +1,6 @@
 # 🐱 Cats Gallery API
 
-A full-stack cat gallery application built with **Hono.js** and deployed on **Cloudflare Workers** with **D1 SQLite** database. Features user authentication with **JWT (JSON Web Tokens)**, a shopping cart system, and CRUD operations for managing cat entries.
+A full-stack cat gallery application built with **Hono.js** and deployed on **Cloudflare Workers** with **D1 SQLite** database. Features user authentication with **JWT (JSON Web Tokens)** stored in **HTTP-only cookies** for maximum security, a shopping cart system, and CRUD operations for managing cat entries.
 
 ---
 
@@ -11,7 +11,7 @@ A full-stack cat gallery application built with **Hono.js** and deployed on **Cl
 - [Project Structure](#-project-structure)
 - [Database Schema](#-database-schema)
 - [Authentication System](#-authentication-system)
-- [JWT Explained](#-jwt-explained)
+- [JWT in Cookies Explained](#-jwt-in-cookies-explained)
 - [API Endpoints](#-api-endpoints)
 - [Frontend Features](#-frontend-features)
 - [Getting Started](#-getting-started)
@@ -22,7 +22,7 @@ A full-stack cat gallery application built with **Hono.js** and deployed on **Cl
 
 This project is a cat gallery web application that allows users to:
 - Browse and search for cats by name or tags
-- Register and login with secure JWT authentication
+- Register and login with secure JWT authentication (stored in HTTP-only cookies)
 - Add, edit, and delete cat entries (authenticated users only)
 - Add cats to a shopping cart (authenticated users only)
 
@@ -36,6 +36,7 @@ This project is a cat gallery web application that allows users to:
 | **Cloudflare Workers** | Serverless edge computing platform |
 | **Cloudflare D1** | SQLite database at the edge |
 | **hono/jwt** | JWT token signing and verification |
+| **hono/cookie** | HTTP-only cookie management |
 | **bcryptjs** | Password hashing library |
 | **Vanilla JavaScript** | Frontend interactivity |
 | **CSS3** | Styling with modern design |
@@ -112,22 +113,22 @@ The application implements **JWT (JSON Web Token)** authentication. Here's how i
 3. Password is hashed using **bcrypt** with 10 salt rounds
 4. User is saved to the `users` table
 5. A JWT token is generated with user info and expiration
-6. Token is returned in the response body
+6. Token is set as an **HTTP-only cookie** in the response
 
 ### Login Flow
 1. User submits email and password
 2. Server retrieves user by email
 3. Password is verified using `bcrypt.compare()`
 4. If valid, a JWT token is generated
-5. Token is returned in the response body
+5. Token is set as an **HTTP-only cookie** in the response
 
 ### Logout Flow
-1. Client removes the token from localStorage
-2. No server-side action needed (stateless!)
+1. Server deletes the token cookie
+2. Client state is cleared
 
 ---
 
-## 🔑 JWT Explained
+## 🔑 JWT in Cookies Explained
 
 ### What is JWT?
 
@@ -141,15 +142,35 @@ header.payload.signature
 - **Payload**: Contains the claims (user data, expiration, etc.)
 - **Signature**: Verifies the token hasn't been tampered with
 
+### Why Store JWT in HTTP-only Cookies?
+
+Storing JWT in HTTP-only cookies provides several security benefits over localStorage:
+
+| Feature | localStorage | HTTP-only Cookie |
+|---------|--------------|------------------|
+| **XSS Protection** | ❌ Vulnerable | ✅ Protected |
+| **JavaScript Access** | ✅ Accessible | ❌ Not accessible |
+| **Auto-sent with requests** | ❌ Manual | ✅ Automatic |
+| **CSRF Risk** | ❌ None | ⚠️ Requires SameSite |
+
 ---
 
-### JWT Configuration in This Project
+### Cookie & JWT Configuration in This Project
 
 Located in `app.js`:
 
 ```javascript
 // JWT settings
 const JWT_EXPIRES_IN = 60 * 60 * 24 * 7; // 7 days in seconds
+
+// Cookie options for JWT storage
+const COOKIE_OPTIONS = {
+  httpOnly: true,     // Cannot be accessed by JavaScript (XSS protection)
+  secure: true,       // Only sent over HTTPS
+  sameSite: 'None',   // Required for cross-origin requests
+  path: '/',          // Cookie is valid for all paths
+  maxAge: JWT_EXPIRES_IN
+};
 
 // Helper function to get JWT secret from environment
 const getJWTSecret = (c) => c.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
@@ -216,25 +237,24 @@ The `authenticateJWT` middleware protects routes that require authentication:
 
 ```javascript
 const authenticateJWT = async (c, next) => {
-  // 1. Get token from Authorization header
-  const authHeader = c.req.header('Authorization');
+  // 1. Get token from HTTP-only cookie
+  const token = getCookie(c, 'token');
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token) {
     return c.json({ error: 'Access denied. No token provided.' }, 401);
   }
 
-  // 2. Extract token (remove 'Bearer ' prefix)
-  const token = authHeader.substring(7);
   const secret = getJWTSecret(c);
 
-  // 3. Verify token
+  // 2. Verify token
   const payload = await verifyToken(secret, token);
 
   if (!payload) {
+    deleteCookie(c, 'token', { path: '/' });
     return c.json({ error: 'Invalid or expired token.' }, 401);
   }
 
-  // 4. Set user info on request context from JWT payload
+  // 3. Set user info on request context from JWT payload
   c.set('user', {
     id: payload.id,
     username: payload.username,
@@ -247,54 +267,33 @@ const authenticateJWT = async (c, next) => {
 
 ---
 
-### Frontend Token Handling
+### Frontend Cookie Handling
 
-#### Storing the Token
-After login or registration, the token is stored in `localStorage`:
+With HTTP-only cookies, the frontend doesn't need to manually manage tokens. The browser automatically sends cookies with each request when using `credentials: 'include'`.
 
-```javascript
-// After successful login
-const data = await response.json();
-localStorage.setItem('token', data.token);
-```
-
-#### Sending the Token
-All authenticated requests include the token in the `Authorization` header:
+#### Making Authenticated Requests
+All authenticated requests must include `credentials: 'include'`:
 
 ```javascript
-function getAuthHeaders() {
-  const token = localStorage.getItem('token');
-  if (token) {
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-  }
-  return {
-    'Content-Type': 'application/json'
-  };
-}
-
 // Example: Protected API call
 const response = await fetch(`${API_URL}/cart`, {
-  headers: getAuthHeaders()
+  credentials: 'include'  // This sends cookies with the request
+});
+
+// Example: Login request
+const response = await fetch(`${API_URL}/auth/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'include',  // This allows receiving and sending cookies
+  body: JSON.stringify({ email, password })
 });
 ```
 
 #### Checking Authentication State
 ```javascript
 async function checkAuthState() {
-  const token = localStorage.getItem('token');
-  
-  if (!token) {
-    showLoggedOutState();
-    return;
-  }
-
   const response = await fetch(`${API_URL}/auth/me`, {
-    headers: {
-      'Authorization': `Bearer ${token}`
-    }
+    credentials: 'include'  // Send cookies
   });
 
   if (response.ok) {
@@ -302,7 +301,6 @@ async function checkAuthState() {
     currentUser = data.user;
     // Show logged-in UI...
   } else {
-    localStorage.removeItem('token');
     showLoggedOutState();
   }
 }
@@ -311,8 +309,12 @@ async function checkAuthState() {
 #### Logout
 ```javascript
 async function logout() {
-  // Simply remove the token from localStorage
-  localStorage.removeItem('token');
+  await fetch(`${API_URL}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include'  // Send cookies
+  });
+  
+  // Server deletes the cookie
   currentUser = null;
   showLoggedOutState();
 }
@@ -326,10 +328,10 @@ async function logout() {
 
 | Method | Endpoint | Description | Auth Required |
 |--------|----------|-------------|---------------|
-| POST | `/auth/register` | Register a new user (returns JWT) | No |
-| POST | `/auth/login` | Login and get JWT token | No |
-| POST | `/auth/logout` | Logout (client-side) | No |
-| GET | `/auth/me` | Get current user info | Yes (JWT) |
+| POST | `/auth/register` | Register a new user (sets JWT cookie) | No |
+| POST | `/auth/login` | Login and get JWT cookie | No |
+| POST | `/auth/logout` | Logout (deletes cookie) | No |
+| GET | `/auth/me` | Get current user info | Yes (Cookie) |
 
 ### Cats Routes
 
@@ -367,7 +369,7 @@ async function logout() {
 - **Tab-based UI**: Switch between login and register forms
 - **Form Validation**: Client-side validation with error messages
 - **Auto-redirect**: Already logged-in users are redirected to gallery
-- **Token Persistence**: JWT stored in localStorage persists across sessions
+- **Token Persistence**: JWT stored in HTTP-only cookie persists across sessions
 
 ---
 
@@ -420,10 +422,12 @@ async function logout() {
 1. **Password Hashing**: bcrypt with salt rounds for secure password storage
 2. **JWT Secret**: Use a long, random secret key in production
 3. **Token Expiration**: Tokens automatically expire after 7 days
-4. **CORS Configuration**: Properly configured for cross-origin requests
-5. **Input Validation**: Server-side validation for all inputs
-6. **XSS Prevention**: HTML escaping in frontend rendering
-7. **Authorization Header**: Tokens sent via secure header, not URL
+4. **HTTP-Only Cookies**: JWT cannot be accessed by JavaScript (XSS protection)
+5. **Secure Flag**: Cookies only sent over HTTPS
+6. **SameSite Attribute**: Cookie policy for cross-origin requests
+7. **CORS Configuration**: Properly configured with `credentials: true`
+8. **Input Validation**: Server-side validation for all inputs
+9. **XSS Prevention**: HTML escaping in frontend rendering
 
 ---
 
@@ -439,15 +443,17 @@ async function logout() {
 │                                                                  │
 │   1. POST /auth/login ───────────────►                          │
 │      { email, password }                                         │
+│      credentials: 'include'                                      │
 │                                                                  │
 │                              2. Validate credentials             │
 │                              3. Hash compare password            │
 │                              4. Generate JWT token               │
 │                                 (sign with secret)               │
 │                                                                  │
-│   ◄─────────────────────────── 5. Return { token, user }        │
+│   ◄─────────────────────────── 5. Set-Cookie: token=<jwt>       │
+│                                   (httpOnly, secure)             │
 │                                                                  │
-│   6. Store token in localStorage                                 │
+│   6. Browser stores cookie automatically                         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -459,9 +465,10 @@ async function logout() {
 │   ──────                          ──────                         │
 │                                                                  │
 │   1. GET /cart ──────────────────────►                          │
-│      Authorization: Bearer <token>                               │
+│      Cookie: token=<jwt>                                         │
+│      (sent automatically)                                        │
 │                                                                  │
-│                              2. Extract token from header        │
+│                              2. Extract token from cookie        │
 │                              3. Verify signature with secret     │
 │                              4. Check expiration (exp claim)     │
 │                              5. Extract user from payload        │
@@ -474,30 +481,34 @@ async function logout() {
 │                        LOGOUT FLOW                               │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   Client                                                         │
-│   ──────                                                         │
+│   Client                          Server                         │
+│   ──────                          ──────                         │
 │                                                                  │
-│   1. localStorage.removeItem('token')                            │
+│   1. POST /auth/logout ──────────────►                          │
+│      Cookie: token=<jwt>                                         │
 │                                                                  │
-│   2. Update UI to logged-out state                               │
+│                              2. Delete cookie                    │
 │                                                                  │
-│   (No server request needed - JWT is stateless!)                 │
+│   ◄─────────────────────────── 3. Set-Cookie: token=;           │
+│                                   expires=past (delete)          │
+│                                                                  │
+│   4. Cookie removed from browser                                 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🆚 JWT vs Session Authentication
+## 🆚 JWT vs Session vs JWT in Cookies
 
-| Feature | Session-Based | JWT (Current) |
-|---------|---------------|---------------|
-| **Storage** | Server database + Cookie | Client localStorage |
-| **Scalability** | Database query per request | Stateless, no DB query |
-| **Logout** | Delete from database | Client removes token |
-| **Token Size** | Small session ID | Larger (contains payload) |
-| **Server State** | Stateful | Stateless |
-| **Revocation** | Easy (delete session) | Harder (wait for expiry) |
+| Feature | Session-Based | JWT (localStorage) | JWT in Cookie (Current) |
+|---------|---------------|---------------------|-------------------------|
+| **Storage** | Server DB + Cookie | Client localStorage | HTTP-only Cookie |
+| **XSS Protection** | ✅ Yes | ❌ No | ✅ Yes |
+| **Stateless** | ❌ No | ✅ Yes | ✅ Yes |
+| **DB Query per request** | ✅ Required | ❌ None | ❌ None |
+| **Auto-sent** | ✅ Yes | ❌ Manual | ✅ Yes |
+| **Logout** | Delete from DB | Remove from storage | Delete cookie |
 
 ---
 

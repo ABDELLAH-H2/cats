@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import bcrypt from 'bcryptjs';
 
 const app = new Hono();
@@ -8,14 +9,23 @@ const app = new Hono();
 // JWT settings
 const JWT_EXPIRES_IN = 60 * 60 * 24 * 7; // 7 days in seconds
 
+// Cookie options for JWT storage
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'None',
+  path: '/',
+  maxAge: JWT_EXPIRES_IN
+};
+
 // Helper function to get JWT secret from environment
 const getJWTSecret = (c) => c.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
 
-// CORS middleware - Allow Authorization header
+// CORS middleware - Allow credentials for cookies
 app.use('*', cors({
   origin: (origin) => origin || '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type'],
   credentials: true,
 }));
 
@@ -43,21 +53,21 @@ async function verifyToken(secret, token) {
   }
 }
 
-// Auth middleware - Validate JWT from Authorization header
+// Auth middleware - Validate JWT from cookie
 const authenticateJWT = async (c, next) => {
-  const authHeader = c.req.header('Authorization');
+  const token = getCookie(c, 'token');
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token) {
     return c.json({ error: 'Access denied. No token provided.' }, 401);
   }
 
-  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
   const secret = getJWTSecret(c);
 
   try {
     const payload = await verifyToken(secret, token);
 
     if (!payload) {
+      deleteCookie(c, 'token', { path: '/' });
       return c.json({ error: 'Invalid or expired token.' }, 401);
     }
 
@@ -71,6 +81,7 @@ const authenticateJWT = async (c, next) => {
     await next();
   } catch (err) {
     console.error('JWT validation error:', err);
+    deleteCookie(c, 'token', { path: '/' });
     return c.json({ error: 'Token validation error.' }, 500);
   }
 };
@@ -120,10 +131,12 @@ app.post('/auth/register', async (c) => {
       email
     });
 
+    // Set JWT in HTTP-only cookie
+    setCookie(c, 'token', token, COOKIE_OPTIONS);
+
     return c.json({
       message: 'User registered successfully',
-      user: { id: userId, username, email },
-      token
+      user: { id: userId, username, email }
     }, 201);
   } catch (error) {
     console.error('Registration error:', error);
@@ -162,10 +175,12 @@ app.post('/auth/login', async (c) => {
       email: user.email
     });
 
+    // Set JWT in HTTP-only cookie
+    setCookie(c, 'token', token, COOKIE_OPTIONS);
+
     return c.json({
       message: 'Login successful',
-      user: { id: user.id, username: user.username, email: user.email },
-      token
+      user: { id: user.id, username: user.username, email: user.email }
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -173,9 +188,9 @@ app.post('/auth/login', async (c) => {
   }
 });
 
-// Logout - With JWT, logout is handled client-side by removing the token
+// Logout - Delete the JWT cookie
 app.post('/auth/logout', async (c) => {
-  // JWT logout is stateless - client simply discards the token
+  deleteCookie(c, 'token', { path: '/' });
   return c.json({ message: 'Logged out successfully' });
 });
 
