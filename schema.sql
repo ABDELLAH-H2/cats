@@ -22,11 +22,5 @@ CREATE TABLE IF NOT EXISTS cart (
     UNIQUE(user_id, cat_id)
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT UNIQUE NOT NULL,
-    user_id INTEGER NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+-- Note: Sessions table is no longer needed with JWT authentication
+-- JWT tokens are stateless and verified using the JWT_SECRET environment variable

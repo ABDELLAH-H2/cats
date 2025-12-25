@@ -46,6 +46,20 @@ let currentTagFilter = null;
 let cart = [];
 let currentUser = null; // Store current user info
 
+// Helper function to get auth headers
+function getAuthHeaders() {
+  const token = localStorage.getItem('token');
+  if (token) {
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  }
+  return {
+    'Content-Type': 'application/json'
+  };
+}
+
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
   checkAuthState();
@@ -53,11 +67,20 @@ document.addEventListener("DOMContentLoaded", () => {
   updateCartUI();
 });
 
-// Auth state management - Check via API call with cookie
+// Auth state management - Check via API call with JWT token
 async function checkAuthState() {
+  const token = localStorage.getItem('token');
+
+  if (!token) {
+    showLoggedOutState();
+    return;
+  }
+
   try {
     const response = await fetch(`${API_URL}/auth/me`, {
-      credentials: 'include' // Send cookies
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
     });
 
     if (response.ok) {
@@ -73,10 +96,13 @@ async function checkAuthState() {
       // Load cart from server for logged-in user
       loadCartFromServer();
     } else {
+      // Token invalid or expired
+      localStorage.removeItem('token');
       showLoggedOutState();
     }
   } catch (error) {
     console.error("Auth check error:", error);
+    localStorage.removeItem('token');
     showLoggedOutState();
   }
 }
@@ -98,7 +124,7 @@ async function loadCartFromServer() {
 
   try {
     const response = await fetch(`${API_URL}/cart`, {
-      credentials: 'include' // Send cookies
+      headers: getAuthHeaders()
     });
 
     if (response.ok) {
@@ -116,20 +142,21 @@ async function loadCartFromServer() {
 }
 
 function isLoggedIn() {
-  return currentUser !== null;
+  return currentUser !== null && localStorage.getItem('token') !== null;
 }
 
 async function logout() {
   try {
     await fetch(`${API_URL}/auth/logout`, {
       method: 'POST',
-      credentials: 'include' // Send cookies
+      headers: getAuthHeaders()
     });
   } catch (error) {
     console.error("Logout error:", error);
   }
 
-  // Clear local state
+  // Clear local state and token
+  localStorage.removeItem('token');
   currentUser = null;
   cart = [];
   updateCartUI();
@@ -383,10 +410,6 @@ async function handleFormSubmit(e) {
     }
   }
 
-  const headers = {
-    "Content-Type": "application/json",
-  };
-
   try {
     if (isEditing) {
       const catId = catIdInput.value;
@@ -396,8 +419,7 @@ async function handleFormSubmit(e) {
 
       const response = await fetch(`${API_URL}/cats/${catId}`, {
         method: "PUT",
-        headers,
-        credentials: 'include',
+        headers: getAuthHeaders(),
         body: JSON.stringify(updateData),
       });
 
@@ -415,8 +437,7 @@ async function handleFormSubmit(e) {
 
       const response = await fetch(`${API_URL}/cats`, {
         method: "POST",
-        headers,
-        credentials: 'include',
+        headers: getAuthHeaders(),
         body: JSON.stringify(postData),
       });
 
@@ -472,7 +493,7 @@ async function deleteCat(id) {
   try {
     const response = await fetch(`${API_URL}/cats/${id}`, {
       method: "DELETE",
-      credentials: 'include',
+      headers: getAuthHeaders(),
     });
 
     if (response.status === 401 || response.status === 403) {
@@ -561,7 +582,7 @@ async function addToCart(catId) {
     try {
       const response = await fetch(`${API_URL}/cart/${catId}`, {
         method: "DELETE",
-        credentials: 'include'
+        headers: getAuthHeaders()
       });
 
       if (response.ok) {
@@ -582,8 +603,7 @@ async function addToCart(catId) {
     try {
       const response = await fetch(`${API_URL}/cart`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: 'include',
+        headers: getAuthHeaders(),
         body: JSON.stringify({ catId })
       });
 
@@ -622,7 +642,7 @@ async function removeFromCart(catId) {
   try {
     const response = await fetch(`${API_URL}/cart/${catId}`, {
       method: "DELETE",
-      credentials: 'include'
+      headers: getAuthHeaders()
     });
 
     if (response.ok) {
@@ -649,7 +669,7 @@ async function clearCart() {
   try {
     const response = await fetch(`${API_URL}/cart`, {
       method: "DELETE",
-      credentials: 'include'
+      headers: getAuthHeaders()
     });
 
     if (response.ok) {

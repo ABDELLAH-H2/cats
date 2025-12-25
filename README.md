@@ -1,6 +1,6 @@
 # 🐱 Cats Gallery API
 
-A full-stack cat gallery application built with **Hono.js** and deployed on **Cloudflare Workers** with **D1 SQLite** database. Features user authentication with secure cookie-based sessions, a shopping cart system, and CRUD operations for managing cat entries.
+A full-stack cat gallery application built with **Hono.js** and deployed on **Cloudflare Workers** with **D1 SQLite** database. Features user authentication with **JWT (JSON Web Tokens)**, a shopping cart system, and CRUD operations for managing cat entries.
 
 ---
 
@@ -11,7 +11,7 @@ A full-stack cat gallery application built with **Hono.js** and deployed on **Cl
 - [Project Structure](#-project-structure)
 - [Database Schema](#-database-schema)
 - [Authentication System](#-authentication-system)
-- [Cookies & Sessions Explained](#-cookies--sessions-explained)
+- [JWT Explained](#-jwt-explained)
 - [API Endpoints](#-api-endpoints)
 - [Frontend Features](#-frontend-features)
 - [Getting Started](#-getting-started)
@@ -22,7 +22,7 @@ A full-stack cat gallery application built with **Hono.js** and deployed on **Cl
 
 This project is a cat gallery web application that allows users to:
 - Browse and search for cats by name or tags
-- Register and login with secure authentication
+- Register and login with secure JWT authentication
 - Add, edit, and delete cat entries (authenticated users only)
 - Add cats to a shopping cart (authenticated users only)
 
@@ -35,6 +35,7 @@ This project is a cat gallery web application that allows users to:
 | **Hono.js** | Lightweight web framework for Cloudflare Workers |
 | **Cloudflare Workers** | Serverless edge computing platform |
 | **Cloudflare D1** | SQLite database at the edge |
+| **hono/jwt** | JWT token signing and verification |
 | **bcryptjs** | Password hashing library |
 | **Vanilla JavaScript** | Frontend interactivity |
 | **CSS3** | Styling with modern design |
@@ -62,7 +63,7 @@ api/
 
 ## 🗄 Database Schema
 
-The application uses 4 tables in the D1 SQLite database:
+The application uses 3 tables in the D1 SQLite database:
 
 ### Users Table
 ```sql
@@ -97,165 +98,147 @@ CREATE TABLE IF NOT EXISTS cart (
 );
 ```
 
-### Sessions Table
-```sql
-CREATE TABLE IF NOT EXISTS sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT UNIQUE NOT NULL,
-    user_id INTEGER NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-```
+> **Note**: Unlike session-based authentication, JWT authentication is **stateless** - no sessions table is needed!
 
 ---
 
 ## 🔐 Authentication System
 
-The application implements a **cookie-based session authentication** system. Here's how it works:
+The application implements **JWT (JSON Web Token)** authentication. Here's how it works:
 
 ### Registration Flow
 1. User submits username, email, and password
 2. Server validates input and checks for existing users
 3. Password is hashed using **bcrypt** with 10 salt rounds
 4. User is saved to the `users` table
-5. A new session is created and stored in the `sessions` table
-6. Session ID is sent back as an **HTTP-only cookie**
+5. A JWT token is generated with user info and expiration
+6. Token is returned in the response body
 
 ### Login Flow
 1. User submits email and password
 2. Server retrieves user by email
 3. Password is verified using `bcrypt.compare()`
-4. If valid, a new session is created
-5. Session ID is sent back as an **HTTP-only cookie**
+4. If valid, a JWT token is generated
+5. Token is returned in the response body
 
 ### Logout Flow
-1. Server reads the session ID from the cookie
-2. Session is deleted from the `sessions` table
-3. Cookie is deleted from the client
+1. Client removes the token from localStorage
+2. No server-side action needed (stateless!)
 
 ---
 
-## 🍪 Cookies & Sessions Explained
+## 🔑 JWT Explained
 
-### What are Cookies?
+### What is JWT?
 
-Cookies are small pieces of data stored by the browser and sent with every HTTP request to the same domain. In this application, cookies are used to maintain user authentication state.
+JWT (JSON Web Token) is a compact, URL-safe means of representing claims between two parties. It consists of three parts:
 
-### What are Sessions?
+```
+header.payload.signature
+```
 
-Sessions are server-side records that link a unique session ID to a user. The session ID is stored in a cookie on the client, while the session data (user info, expiration) is stored in the database.
+- **Header**: Contains the token type (JWT) and signing algorithm
+- **Payload**: Contains the claims (user data, expiration, etc.)
+- **Signature**: Verifies the token hasn't been tampered with
 
 ---
 
-### Cookie Configuration in This Project
+### JWT Configuration in This Project
 
 Located in `app.js`:
 
 ```javascript
-const SESSION_DURATION_DAYS = 7;
+// JWT settings
+const JWT_EXPIRES_IN = 60 * 60 * 24 * 7; // 7 days in seconds
 
-const COOKIE_OPTIONS = {
-  httpOnly: true,     // Cannot be accessed by JavaScript (XSS protection)
-  secure: true,       // Only sent over HTTPS
-  sameSite: 'None',   // Required for cross-origin requests
-  path: '/',          // Cookie is valid for all paths
-  maxAge: 60 * 60 * 24 * SESSION_DURATION_DAYS  // 7 days in seconds
-};
+// Helper function to get JWT secret from environment
+const getJWTSecret = (c) => c.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
 ```
 
-### Cookie Options Explained
+### JWT Token Structure
 
-| Option | Value | Purpose |
-|--------|-------|---------|
-| `httpOnly` | `true` | **Security**: Prevents JavaScript from accessing the cookie, protecting against XSS attacks |
-| `secure` | `true` | **Security**: Cookie is only sent over HTTPS connections |
-| `sameSite` | `'None'` | Allows cookie to be sent in cross-origin requests (needed for Cloudflare Workers) |
-| `path` | `'/'` | Cookie is valid for all routes on the domain |
-| `maxAge` | `604800` | Cookie expires after 7 days (in seconds) |
+When a user logs in or registers, they receive a token like:
+
+```json
+{
+  "id": 1,
+  "username": "john",
+  "email": "john@example.com",
+  "iat": 1703500000,
+  "exp": 1704104800
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `id` | User's database ID |
+| `username` | User's username |
+| `email` | User's email |
+| `iat` | Issued At timestamp (when token was created) |
+| `exp` | Expiration timestamp (when token expires) |
 
 ---
 
-### Session Management Functions
+### JWT Helper Functions
 
-#### 1. Generate Session ID
+#### 1. Generate Token
 ```javascript
-function generateSessionId() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let sessionId = '';
-  for (let i = 0; i < 64; i++) {
-    sessionId += chars.charAt(Math.floor(Math.random() * chars.length));
+async function generateToken(secret, payload) {
+  const now = Math.floor(Date.now() / 1000);
+  const tokenPayload = {
+    ...payload,
+    iat: now,
+    exp: now + JWT_EXPIRES_IN
+  };
+  return await sign(tokenPayload, secret);
+}
+```
+Creates a signed JWT token with user data and expiration.
+
+#### 2. Verify Token
+```javascript
+async function verifyToken(secret, token) {
+  try {
+    const payload = await verify(token, secret);
+    return payload;
+  } catch (error) {
+    return null;
   }
-  return sessionId;
 }
 ```
-Generates a random 64-character alphanumeric string for secure session identification.
-
-#### 2. Create Session
-```javascript
-async function createSession(db, userId) {
-  const sessionId = generateSessionId();
-  const expiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-
-  await db.prepare(
-    'INSERT INTO sessions (session_id, user_id, expires_at) VALUES (?, ?, ?)'
-  ).bind(sessionId, userId, expiresAt).run();
-
-  return sessionId;
-}
-```
-Creates a new session record in the database with an expiration date.
-
-#### 3. Get Session
-```javascript
-async function getSession(db, sessionId) {
-  const session = await db.prepare(
-    'SELECT s.*, u.id as user_id, u.username, u.email FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.session_id = ? AND s.expires_at > datetime("now")'
-  ).bind(sessionId).first();
-
-  return session;
-}
-```
-Retrieves session data if it exists and hasn't expired.
-
-#### 4. Delete Session
-```javascript
-async function deleteSession(db, sessionId) {
-  await db.prepare('DELETE FROM sessions WHERE session_id = ?').bind(sessionId).run();
-}
-```
-Removes a session from the database (used for logout).
+Validates the token signature and checks if it's expired.
 
 ---
 
 ### Authentication Middleware
 
-The `authenticateSession` middleware protects routes that require authentication:
+The `authenticateJWT` middleware protects routes that require authentication:
 
 ```javascript
-const authenticateSession = async (c, next) => {
-  // 1. Get session ID from cookie
-  const sessionId = getCookie(c, 'sessionId');
-  
-  if (!sessionId) {
-    return c.json({ error: 'Access denied. Not authenticated.' }, 401);
+const authenticateJWT = async (c, next) => {
+  // 1. Get token from Authorization header
+  const authHeader = c.req.header('Authorization');
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Access denied. No token provided.' }, 401);
   }
 
-  // 2. Validate session in database
-  const session = await getSession(db, sessionId);
+  // 2. Extract token (remove 'Bearer ' prefix)
+  const token = authHeader.substring(7);
+  const secret = getJWTSecret(c);
 
-  if (!session) {
-    // Session expired or invalid - clear the cookie
-    deleteCookie(c, 'sessionId', { path: '/' });
-    return c.json({ error: 'Session expired. Please sign in again.' }, 401);
+  // 3. Verify token
+  const payload = await verifyToken(secret, token);
+
+  if (!payload) {
+    return c.json({ error: 'Invalid or expired token.' }, 401);
   }
 
-  // 3. Set user info on request context
+  // 4. Set user info on request context from JWT payload
   c.set('user', {
-    id: session.user_id,
-    username: session.username,
-    email: session.email
+    id: payload.id,
+    username: payload.username,
+    email: payload.email
   });
 
   await next();
@@ -264,36 +247,75 @@ const authenticateSession = async (c, next) => {
 
 ---
 
-### Frontend Cookie Handling
+### Frontend Token Handling
 
-All frontend API requests include `credentials: 'include'` to send cookies:
+#### Storing the Token
+After login or registration, the token is stored in `localStorage`:
 
 ```javascript
-// Example: Checking authentication state
-const response = await fetch(`${API_URL}/auth/me`, {
-  credentials: 'include'  // This sends cookies with the request
-});
+// After successful login
+const data = await response.json();
+localStorage.setItem('token', data.token);
+```
 
-// Example: Login request
-const response = await fetch(`${API_URL}/auth/login`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  credentials: 'include',  // This allows receiving and sending cookies
-  body: JSON.stringify({ email, password })
+#### Sending the Token
+All authenticated requests include the token in the `Authorization` header:
+
+```javascript
+function getAuthHeaders() {
+  const token = localStorage.getItem('token');
+  if (token) {
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  }
+  return {
+    'Content-Type': 'application/json'
+  };
+}
+
+// Example: Protected API call
+const response = await fetch(`${API_URL}/cart`, {
+  headers: getAuthHeaders()
 });
 ```
 
-### CORS Configuration for Cookies
-
-To allow cookies in cross-origin requests, the server configures CORS:
-
+#### Checking Authentication State
 ```javascript
-app.use('*', cors({
-  origin: (origin) => origin || '*',
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type'],
-  credentials: true  // This is required for cookies to work cross-origin
-}));
+async function checkAuthState() {
+  const token = localStorage.getItem('token');
+  
+  if (!token) {
+    showLoggedOutState();
+    return;
+  }
+
+  const response = await fetch(`${API_URL}/auth/me`, {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  });
+
+  if (response.ok) {
+    const data = await response.json();
+    currentUser = data.user;
+    // Show logged-in UI...
+  } else {
+    localStorage.removeItem('token');
+    showLoggedOutState();
+  }
+}
+```
+
+#### Logout
+```javascript
+async function logout() {
+  // Simply remove the token from localStorage
+  localStorage.removeItem('token');
+  currentUser = null;
+  showLoggedOutState();
+}
 ```
 
 ---
@@ -304,10 +326,10 @@ app.use('*', cors({
 
 | Method | Endpoint | Description | Auth Required |
 |--------|----------|-------------|---------------|
-| POST | `/auth/register` | Register a new user | No |
-| POST | `/auth/login` | Login and get session cookie | No |
-| POST | `/auth/logout` | Logout and clear session | No |
-| GET | `/auth/me` | Get current user info | Yes (Cookie) |
+| POST | `/auth/register` | Register a new user (returns JWT) | No |
+| POST | `/auth/login` | Login and get JWT token | No |
+| POST | `/auth/logout` | Logout (client-side) | No |
+| GET | `/auth/me` | Get current user info | Yes (JWT) |
 
 ### Cats Routes
 
@@ -345,7 +367,7 @@ app.use('*', cors({
 - **Tab-based UI**: Switch between login and register forms
 - **Form Validation**: Client-side validation with error messages
 - **Auto-redirect**: Already logged-in users are redirected to gallery
-- **Session Persistence**: Login state persists across browser sessions
+- **Token Persistence**: JWT stored in localStorage persists across sessions
 
 ---
 
@@ -373,31 +395,39 @@ app.use('*', cors({
    wrangler d1 execute cats-db --file=schema.sql
    ```
 
-4. **Start development server**
+4. **Configure JWT Secret**
+   
+   Add to your `wrangler.toml` or set in Cloudflare dashboard:
+   ```toml
+   [vars]
+   JWT_SECRET = "your-super-secret-key-here-make-it-long-and-random"
+   ```
+
+5. **Start development server**
    ```bash
    npm run dev
    ```
 
-5. **Deploy to Cloudflare**
+6. **Deploy to Cloudflare**
    ```bash
    npm run deploy
    ```
 
 ---
 
-## 🔒 Security Best Practices Used
+## 🔒 Security Best Practices
 
-1. **HTTP-Only Cookies**: Session cookies cannot be accessed by JavaScript
-2. **Secure Flag**: Cookies are only sent over HTTPS
-3. **Password Hashing**: bcrypt with salt rounds for secure password storage
-4. **Session Expiration**: Sessions automatically expire after 7 days
-5. **CORS Configuration**: Properly configured for cross-origin requests
-6. **Input Validation**: Server-side validation for all inputs
-7. **XSS Prevention**: HTML escaping in frontend rendering
+1. **Password Hashing**: bcrypt with salt rounds for secure password storage
+2. **JWT Secret**: Use a long, random secret key in production
+3. **Token Expiration**: Tokens automatically expire after 7 days
+4. **CORS Configuration**: Properly configured for cross-origin requests
+5. **Input Validation**: Server-side validation for all inputs
+6. **XSS Prevention**: HTML escaping in frontend rendering
+7. **Authorization Header**: Tokens sent via secure header, not URL
 
 ---
 
-## 📝 Summary: Cookie & Session Flow
+## 📝 Summary: JWT Authentication Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -412,13 +442,12 @@ app.use('*', cors({
 │                                                                  │
 │                              2. Validate credentials             │
 │                              3. Hash compare password            │
-│                              4. Generate session ID              │
-│                              5. Store in sessions table          │
+│                              4. Generate JWT token               │
+│                                 (sign with secret)               │
 │                                                                  │
-│   ◄─────────────────────────── 6. Set-Cookie: sessionId=xxx     │
-│                                   (httpOnly, secure)             │
+│   ◄─────────────────────────── 5. Return { token, user }        │
 │                                                                  │
-│   7. Store cookie locally                                        │
+│   6. Store token in localStorage                                 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -430,12 +459,12 @@ app.use('*', cors({
 │   ──────                          ──────                         │
 │                                                                  │
 │   1. GET /cart ──────────────────────►                          │
-│      Cookie: sessionId=xxx                                       │
+│      Authorization: Bearer <token>                               │
 │                                                                  │
-│                              2. Read sessionId from cookie       │
-│                              3. Query sessions table             │
-│                              4. Verify not expired               │
-│                              5. Get user from session            │
+│                              2. Extract token from header        │
+│                              3. Verify signature with secret     │
+│                              4. Check expiration (exp claim)     │
+│                              5. Extract user from payload        │
 │                                                                  │
 │   ◄─────────────────────────── 6. Return user's cart data       │
 │                                                                  │
@@ -445,21 +474,30 @@ app.use('*', cors({
 │                        LOGOUT FLOW                               │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   Client                          Server                         │
-│   ──────                          ──────                         │
+│   Client                                                         │
+│   ──────                                                         │
 │                                                                  │
-│   1. POST /auth/logout ──────────────►                          │
-│      Cookie: sessionId=xxx                                       │
+│   1. localStorage.removeItem('token')                            │
 │                                                                  │
-│                              2. Delete session from DB           │
+│   2. Update UI to logged-out state                               │
 │                                                                  │
-│   ◄─────────────────────────── 3. Set-Cookie: sessionId=;       │
-│                                   expires=past (delete cookie)   │
-│                                                                  │
-│   4. Cookie removed from browser                                 │
+│   (No server request needed - JWT is stateless!)                 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🆚 JWT vs Session Authentication
+
+| Feature | Session-Based | JWT (Current) |
+|---------|---------------|---------------|
+| **Storage** | Server database + Cookie | Client localStorage |
+| **Scalability** | Database query per request | Stateless, no DB query |
+| **Logout** | Delete from database | Client removes token |
+| **Token Size** | Small session ID | Larger (contains payload) |
+| **Server State** | Stateful | Stateless |
+| **Revocation** | Easy (delete session) | Harder (wait for expiry) |
 
 ---
 

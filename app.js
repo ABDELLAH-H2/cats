@@ -1,104 +1,77 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { sign, verify } from 'hono/jwt';
 import bcrypt from 'bcryptjs';
 
 const app = new Hono();
 
-// Session settings
-const SESSION_DURATION_DAYS = 7;
+// JWT settings
+const JWT_EXPIRES_IN = 60 * 60 * 24 * 7; // 7 days in seconds
 
-// Cookie options
-const COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: true,
-  sameSite: 'None',
-  path: '/',
-  maxAge: 60 * 60 * 24 * SESSION_DURATION_DAYS
-};
+// Helper function to get JWT secret from environment
+const getJWTSecret = (c) => c.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
 
-// CORS middleware - Allow credentials for cookies
+// CORS middleware - Allow Authorization header
 app.use('*', cors({
   origin: (origin) => origin || '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type'],
+  allowHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
 }));
 
 // Helper function to get D1 database from context
 const getDB = (c) => c.env.DB;
 
-// Generate random session ID
-function generateSessionId() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let sessionId = '';
-  for (let i = 0; i < 64; i++) {
-    sessionId += chars.charAt(Math.floor(Math.random() * chars.length));
+// Generate JWT token
+async function generateToken(secret, payload) {
+  const now = Math.floor(Date.now() / 1000);
+  const tokenPayload = {
+    ...payload,
+    iat: now,
+    exp: now + JWT_EXPIRES_IN
+  };
+  return await sign(tokenPayload, secret);
+}
+
+// Verify JWT token
+async function verifyToken(secret, token) {
+  try {
+    const payload = await verify(token, secret);
+    return payload;
+  } catch (error) {
+    return null;
   }
-  return sessionId;
 }
 
-// Create session in database
-async function createSession(db, userId) {
-  const sessionId = generateSessionId();
-  const expiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+// Auth middleware - Validate JWT from Authorization header
+const authenticateJWT = async (c, next) => {
+  const authHeader = c.req.header('Authorization');
 
-  await db.prepare(
-    'INSERT INTO sessions (session_id, user_id, expires_at) VALUES (?, ?, ?)'
-  ).bind(sessionId, userId, expiresAt).run();
-
-  return sessionId;
-}
-
-// Get session from database
-async function getSession(db, sessionId) {
-  const session = await db.prepare(
-    'SELECT s.*, u.id as user_id, u.username, u.email FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.session_id = ? AND s.expires_at > datetime("now")'
-  ).bind(sessionId).first();
-
-  return session;
-}
-
-// Delete session from database
-async function deleteSession(db, sessionId) {
-  await db.prepare('DELETE FROM sessions WHERE session_id = ?').bind(sessionId).run();
-}
-
-// Delete all sessions for user (logout everywhere)
-async function deleteUserSessions(db, userId) {
-  await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
-}
-
-// Auth middleware - Validate session from cookie
-const authenticateSession = async (c, next) => {
-  const sessionId = getCookie(c, 'sessionId');
-  const db = getDB(c);
-
-  if (!sessionId) {
-    return c.json({ error: 'Access denied. Not authenticated.' }, 401);
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Access denied. No token provided.' }, 401);
   }
+
+  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+  const secret = getJWTSecret(c);
 
   try {
-    const session = await getSession(db, sessionId);
+    const payload = await verifyToken(secret, token);
 
-    if (!session) {
-      deleteCookie(c, 'sessionId', { path: '/' });
-      return c.json({ error: 'Session expired. Please sign in again.' }, 401);
+    if (!payload) {
+      return c.json({ error: 'Invalid or expired token.' }, 401);
     }
 
-    // Set user info on context
+    // Set user info on context from JWT payload
     c.set('user', {
-      id: session.user_id,
-      username: session.username,
-      email: session.email
+      id: payload.id,
+      username: payload.username,
+      email: payload.email
     });
-    c.set('sessionId', sessionId);
 
     await next();
   } catch (err) {
-    console.error('Session validation error:', err);
-    deleteCookie(c, 'sessionId', { path: '/' });
-    return c.json({ error: 'Session error.' }, 500);
+    console.error('JWT validation error:', err);
+    return c.json({ error: 'Token validation error.' }, 500);
   }
 };
 
@@ -107,6 +80,7 @@ const authenticateSession = async (c, next) => {
 // Register
 app.post('/auth/register', async (c) => {
   const db = getDB(c);
+  const secret = getJWTSecret(c);
   const { username, email, password } = await c.req.json();
 
   // Validation
@@ -139,15 +113,17 @@ app.post('/auth/register', async (c) => {
 
     const userId = result.meta.last_row_id;
 
-    // Create session
-    const sessionId = await createSession(db, userId);
-
-    // Set session cookie
-    setCookie(c, 'sessionId', sessionId, COOKIE_OPTIONS);
+    // Generate JWT token
+    const token = await generateToken(secret, {
+      id: userId,
+      username,
+      email
+    });
 
     return c.json({
       message: 'User registered successfully',
-      user: { id: userId, username, email }
+      user: { id: userId, username, email },
+      token
     }, 201);
   } catch (error) {
     console.error('Registration error:', error);
@@ -158,6 +134,7 @@ app.post('/auth/register', async (c) => {
 // Login
 app.post('/auth/login', async (c) => {
   const db = getDB(c);
+  const secret = getJWTSecret(c);
   const { email, password } = await c.req.json();
 
   if (!email || !password) {
@@ -178,15 +155,17 @@ app.post('/auth/login', async (c) => {
       return c.json({ error: 'Invalid email or password' }, 401);
     }
 
-    // Create session
-    const sessionId = await createSession(db, user.id);
-
-    // Set session cookie
-    setCookie(c, 'sessionId', sessionId, COOKIE_OPTIONS);
+    // Generate JWT token
+    const token = await generateToken(secret, {
+      id: user.id,
+      username: user.username,
+      email: user.email
+    });
 
     return c.json({
       message: 'Login successful',
-      user: { id: user.id, username: user.username, email: user.email }
+      user: { id: user.id, username: user.username, email: user.email },
+      token
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -194,21 +173,14 @@ app.post('/auth/login', async (c) => {
   }
 });
 
-// Logout - Delete session from database and clear cookie
+// Logout - With JWT, logout is handled client-side by removing the token
 app.post('/auth/logout', async (c) => {
-  const sessionId = getCookie(c, 'sessionId');
-  const db = getDB(c);
-
-  if (sessionId) {
-    await deleteSession(db, sessionId);
-  }
-
-  deleteCookie(c, 'sessionId', { path: '/' });
+  // JWT logout is stateless - client simply discards the token
   return c.json({ message: 'Logged out successfully' });
 });
 
 // Get current user info
-app.get('/auth/me', authenticateSession, async (c) => {
+app.get('/auth/me', authenticateJWT, async (c) => {
   const user = c.get('user');
   return c.json({ user });
 });
@@ -284,7 +256,7 @@ app.get('/cats/:id', async (c) => {
 });
 
 // Post cats (protected)
-app.post('/cats', authenticateSession, async (c) => {
+app.post('/cats', authenticateJWT, async (c) => {
   const db = getDB(c);
   const { name, pfp, tags } = await c.req.json();
 
@@ -311,7 +283,7 @@ app.post('/cats', authenticateSession, async (c) => {
 });
 
 // Delete a record (protected)
-app.delete('/cats/:id', authenticateSession, async (c) => {
+app.delete('/cats/:id', authenticateJWT, async (c) => {
   const db = getDB(c);
   const id = c.req.param('id');
 
@@ -325,7 +297,7 @@ app.delete('/cats/:id', authenticateSession, async (c) => {
 });
 
 // Update a record by ID (protected)
-app.put('/cats/:id', authenticateSession, async (c) => {
+app.put('/cats/:id', authenticateJWT, async (c) => {
   const db = getDB(c);
   const catId = c.req.param('id');
   const updates = await c.req.json();
@@ -373,7 +345,7 @@ app.put('/cats/:id', authenticateSession, async (c) => {
 // ==================== CART ROUTES ====================
 
 // Get user's cart
-app.get('/cart', authenticateSession, async (c) => {
+app.get('/cart', authenticateJWT, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
 
@@ -394,7 +366,7 @@ app.get('/cart', authenticateSession, async (c) => {
 });
 
 // Add cat to cart
-app.post('/cart', authenticateSession, async (c) => {
+app.post('/cart', authenticateJWT, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
   const { catId } = await c.req.json();
@@ -432,7 +404,7 @@ app.post('/cart', authenticateSession, async (c) => {
 });
 
 // Remove cat from cart
-app.delete('/cart/:catId', authenticateSession, async (c) => {
+app.delete('/cart/:catId', authenticateJWT, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
   const catId = c.req.param('catId');
@@ -454,7 +426,7 @@ app.delete('/cart/:catId', authenticateSession, async (c) => {
 });
 
 // Clear entire cart
-app.delete('/cart', authenticateSession, async (c) => {
+app.delete('/cart', authenticateJWT, async (c) => {
   const db = getDB(c);
   const user = c.get('user');
 

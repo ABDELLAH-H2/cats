@@ -10,18 +10,27 @@ const successMessage = document.getElementById("success-message");
 
 // Check if already logged in
 document.addEventListener("DOMContentLoaded", () => {
-    // Check if user is authenticated via cookie
-    fetch(`${API_URL}/auth/me`, {
-        credentials: 'include' // Include cookies
-    })
-        .then((res) => {
-            if (res.ok) {
-                window.location.href = "index.html";
+    const token = localStorage.getItem('token');
+    if (token) {
+        // Verify token is still valid
+        fetch(`${API_URL}/auth/me`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
             }
         })
-        .catch(() => {
-            // Not logged in, stay on login page
-        });
+            .then((res) => {
+                if (res.ok) {
+                    window.location.href = "index.html";
+                } else {
+                    // Token invalid, remove it
+                    localStorage.removeItem('token');
+                }
+            })
+            .catch(() => {
+                // Not logged in, stay on login page
+                localStorage.removeItem('token');
+            });
+    }
 });
 
 // Tab switching
@@ -60,7 +69,6 @@ loginForm.addEventListener("submit", async (e) => {
         const response = await fetch(`${API_URL}/auth/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            credentials: 'include', // Include cookies
             body: JSON.stringify({ email, password }),
         });
 
@@ -69,6 +77,9 @@ loginForm.addEventListener("submit", async (e) => {
         if (!response.ok) {
             throw new Error(data.error || "Login failed");
         }
+
+        // Store JWT token in localStorage
+        localStorage.setItem('token', data.token);
 
         showSuccess("Login successful! Redirecting...");
 
@@ -99,7 +110,6 @@ registerForm.addEventListener("submit", async (e) => {
         const response = await fetch(`${API_URL}/auth/register`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            credentials: 'include', // Include cookies
             body: JSON.stringify({ username, email, password }),
         });
 
@@ -108,6 +118,9 @@ registerForm.addEventListener("submit", async (e) => {
         if (!response.ok) {
             throw new Error(data.error || "Registration failed");
         }
+
+        // Store JWT token in localStorage
+        localStorage.setItem('token', data.token);
 
         showSuccess("Account created! Redirecting...");
 
